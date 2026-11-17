@@ -120,13 +120,54 @@
     </tbody>
   </table>
 </div>
+{% endif %}
 
 <div class="card">
-  <h2>下载编号对照 CSV</h2>
-  {% if all_resolved %}
-    <p>全部 {{ result.left_ids|length }} 个样本候选均已唯一，可以供数。</p>
-    <a class="btn btn-primary" href="{{ url_for('download_mapping', dataset_id=row.id) }}">下载编号对照 CSV</a>
+  <h2>跨任务核查（同号院内编号指纹矛盾）</h2>
+  <p class="muted">只与“已全部唯一”的任务比对：同一院内编号在两个任务中对应的匿名样本，
+    原六个位点中双方均非空且数值不同的位点即列为矛盾。每次打开本页或下载前都会按最新提交状态重新判定。</p>
+  {% if cross.status == 'not_resolved' %}
+    <p><span class="tag tag-warn">暂不参与</span>
+      当前任务尚未全部唯一，不参与跨任务核查；待全部样本候选唯一后自动纳入比对。</p>
+  {% elif cross.status == 'no_peer' %}
+    <p><span class="tag tag-warn">没有可比任务</span>
+      当前没有其他“已全部唯一”的任务，暂无法做跨任务比对。</p>
+  {% elif cross.status == 'clear' %}
+    <p><span class="tag tag-ok">未发现矛盾</span>
+      已与已全部唯一的任务
+      {% for p in cross.peers %}#{{ p.dataset_id }}{{ '、' if not loop.last }}{% endfor %}
+      比对同号院内编号共 {{ cross.checked }} 个，原六个位点未发现双方非空且数值不同的情况。</p>
   {% else %}
+    <p class="flash error" style="margin:0 0 10px">
+      发现 {{ cross.conflicts|length }} 处矛盾：同一院内编号在不同任务中对应的匿名样本指纹不一致。
+      已禁止本任务下载编号对照，请先核实回库数据。</p>
+    <table>
+      <thead><tr>
+        <th class="id">院内编号</th><th>任务</th><th>匿名样本</th>
+        <th>任务</th><th>匿名样本</th><th>位点</th><th>值</th><th>值</th>
+      </tr></thead>
+      <tbody>
+      {% for c in cross.conflicts %}
+        <tr>
+          <td class="id">{{ c.right_id }}</td>
+          <td>#{{ c.current_dataset_id }}</td>
+          <td>{{ c.current_left_id }}</td>
+          <td>#{{ c.other_dataset_id }}</td>
+          <td>{{ c.other_left_id }}</td>
+          <td>{{ c.locus }}</td>
+          <td class="mm">{{ c.current_value }}</td>
+          <td class="mm">{{ c.other_value }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</div>
+
+{% if result.feasible %}
+<div class="card">
+  <h2>下载编号对照 CSV</h2>
+  {% if not all_resolved %}
     <p>仍有样本存在歧义，按规定<strong>不得供数</strong>。请继续依据外部证据锁定，直到全部样本候选唯一。</p>
     <button class="btn btn-muted" disabled>下载（需全部唯一）</button>
     <p class="muted">尚未唯一的样本：
@@ -134,6 +175,13 @@
         {% if result.candidates[lid]|length != 1 and not locks.get(lid) %}<code>{{ lid }}</code>（{{ result.candidates[lid]|length }} 个候选）{% endif %}
       {% endfor %}
     </p>
+  {% elif cross.status == 'conflict' %}
+    <p>跨任务核查发现同号院内编号指纹矛盾，按规定<strong>禁止下载对照</strong>。
+      请先核实上方“跨任务核查”列出的 {{ cross.conflicts|length }} 处矛盾位点。</p>
+    <button class="btn btn-muted" disabled>下载（存在跨任务矛盾）</button>
+  {% else %}
+    <p>全部 {{ result.left_ids|length }} 个样本候选均已唯一，且跨任务核查未发现矛盾，可以供数。</p>
+    <a class="btn btn-primary" href="{{ url_for('download_mapping', dataset_id=row.id) }}">下载编号对照 CSV</a>
   {% endif %}
 </div>
 {% endif %}

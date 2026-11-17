@@ -92,6 +92,25 @@ class Store:
         finally:
             conn.close()
 
+    @contextmanager
+    def snapshot(self):
+        """只读一致性快照事务（WAL 读快照）。
+
+        事务内的全部 SELECT 看到同一个已提交状态：即使快照期间其他连接
+        提交了上传或锁定，本快照的后续读取也不会混入新状态。读取失败
+        （如磁盘错误）会抛异常，调用方不得把失败当作“无冲突”。
+        """
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN")
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     # ------------------------------------------------------------------ 读
     def get_dataset(self, dataset_id: int) -> Optional[sqlite3.Row]:
         with self._connect() as conn:
@@ -123,6 +142,31 @@ class Store:
                 (dataset_id,),
             ).fetchall()
             return {r["left_id"]: r["right_id"] for r in rows}
+
+    def load_all_bundles(self):
+        """在同一读快照中取出全部任务及其样本、锁定。
+
+        返回 [(dataset_row, sample_rows, lock_rows), ...]，按任务号升序。
+        快照内所有读取来自同一个已提交状态，供跨任务核查与下载使用；
+        读取失败抛 sqlite3.Error。
+        """
+        with self.snapshot() as conn:
+            bundles = []
+            rows = conn.execute(
+                "SELECT * FROM datasets ORDER BY id"
+            ).fetchall()
+            for row in rows:
+                samples = conn.execute(
+                    "SELECT side, sample_id, genotype_json FROM samples "
+                    "WHERE dataset_id = ? ORDER BY idx",
+                    (row["id"],),
+                ).fetchall()
+                locks = conn.execute(
+                    "SELECT left_id, right_id FROM locks WHERE dataset_id = ?",
+                    (row["id"],),
+                ).fetchall()
+                bundles.append((row, samples, locks))
+            return bundles
 
     # ------------------------------------------------------------------ 写
     def create_dataset(self,

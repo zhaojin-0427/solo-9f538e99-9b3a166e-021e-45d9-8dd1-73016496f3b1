@@ -80,3 +80,34 @@ def test_wal_mode_enabled(store):
     with store._connect() as conn:
         mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
     assert mode.lower() == "wal"
+
+
+def test_snapshot_reads_single_committed_state(store):
+    """读快照事务期间其他连接提交新锁定，快照内读取仍看到旧的已提交状态。"""
+    ds = store.create_dataset("左", "右", LOCI, LEFT, RIGHT, 0, True, None)
+    with store.snapshot() as conn:
+        q_locks = "SELECT COUNT(*) FROM locks WHERE dataset_id = ?"
+        q_rev = "SELECT revision FROM datasets WHERE id = ?"
+        before_locks = conn.execute(q_locks, (ds,)).fetchone()[0]
+        before_rev = conn.execute(q_rev, (ds,)).fetchone()[0]
+        # 另一连接在快照读取期间提交新锁定（WAL 下写不阻塞读）
+        store.add_lock(ds, "L1", "R1")
+        after_locks = conn.execute(q_locks, (ds,)).fetchone()[0]
+        after_rev = conn.execute(q_rev, (ds,)).fetchone()[0]
+    # 快照内两次读取一致：同一个已提交状态，看不到新提交
+    assert before_locks == after_locks == 0
+    assert before_rev == after_rev == 1
+    # 快照结束后，新读取看到新状态
+    assert store.get_locks(ds) == {"L1": "R1"}
+    assert store.get_dataset(ds)["revision"] == 2
+
+
+def test_load_all_bundles_returns_everything(store):
+    ds1 = store.create_dataset("左", "右", LOCI, LEFT, RIGHT, 0, True, None)
+    ds2 = store.create_dataset("左2", "右2", LOCI, LEFT, RIGHT, 0, True, None)
+    store.add_lock(ds2, "L1", "R1")
+    bundles = store.load_all_bundles()
+    assert [b[0]["id"] for b in bundles] == [ds1, ds2]
+    _, samples2, locks2 = bundles[1]
+    assert len(samples2) == 4  # 两侧各 2 个样本
+    assert {r["left_id"]: r["right_id"] for r in locks2} == {"L1": "R1"}
